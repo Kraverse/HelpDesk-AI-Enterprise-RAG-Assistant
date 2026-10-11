@@ -25,6 +25,14 @@ def test_model_must_be_explicit(monkeypatch):
         client.chat_completion([{"role": "user", "content": "hello"}])
 
 
+def test_missing_api_key_is_clear_and_never_sends_request(monkeypatch):
+    monkeypatch.setattr(client, "NVIDIA_API_KEY", "")
+    monkeypatch.setattr(client, "NVIDIA_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "urlopen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not call network")))
+    with pytest.raises(client.ProviderError, match="API key is not configured"):
+        client.chat_completion([{"role": "user", "content": "question"}])
+
+
 def test_request_uses_configured_model_and_bearer_key(monkeypatch):
     monkeypatch.setattr(client, "NVIDIA_API_KEY", "test-secret")
     monkeypatch.setattr(client, "NVIDIA_MODEL", "approved/model-id")

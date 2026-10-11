@@ -15,6 +15,12 @@ def document(text, source):
 def test_retrieval_refuses_when_nearest_match_is_weak(monkeypatch):
     monkeypatch.setattr(rag, "_vector_store", FakeStore([(document("Shipping takes 5 days.", "shipping.txt"), 2.0)]))
     monkeypatch.setattr(rag, "MAX_L2_DISTANCE", 1.5)
+    monkeypatch.setattr(rag, "NVIDIA_MODEL", "approved-test-model")
+    monkeypatch.setattr(
+        rag,
+        "chat_completion",
+        lambda _messages: (_ for _ in ()).throw(AssertionError("LLM must not be called for weak evidence")),
+    )
     response = rag.query("Tell me about returns")
     assert response.answer == rag.REFUSAL
     assert response.sources == []
@@ -49,3 +55,15 @@ def test_provider_failure_is_user_safe(monkeypatch):
     response = rag.query("How long is shipping?")
     assert "authentication" in response.error
     assert "Authorization" not in response.error
+
+
+def test_startup_reports_missing_nvidia_key_without_disclosing_secrets(monkeypatch):
+    monkeypatch.setattr(rag, "get_embeddings", lambda: object())
+    monkeypatch.setattr(rag, "load_vector_store", lambda: object())
+    monkeypatch.setattr(rag, "_chunk_count", 3)
+    monkeypatch.setattr(rag, "NVIDIA_MODEL", "approved-test-model")
+    monkeypatch.setattr(rag, "NVIDIA_API_KEY", "")
+    status = rag.initialize_system()
+    assert status["index_ready"] is True
+    assert status["llm_ready"] is False
+    assert status["error"] == "NVIDIA_API_KEY is not configured; generation is unavailable."
