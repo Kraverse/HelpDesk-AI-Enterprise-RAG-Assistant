@@ -1,9 +1,7 @@
 # HelpDesk AI — Enterprise RAG Assistant
 
 <p align="center">
-  <img src="assets/chatbot.png" alt="HelpDesk AI" width="120" height="120" />
-
-  **Intelligent Customer Support Powered by Retrieval-Augmented Generation**
+  **Customer support answers grounded in your knowledge base**
 
   [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
   [![Streamlit](https://img.shields.io/badge/Streamlit-1.45%2B-red.svg)](https://streamlit.io)
@@ -16,218 +14,151 @@
 
 ## Overview
 
-HelpDesk AI is an enterprise-grade customer support assistant that uses **Retrieval-Augmented Generation (RAG)** to answer questions exclusively from your company's knowledge base. It combines the power of large language models with precise document retrieval to deliver accurate, hallucination-free responses.
+HelpDesk AI is a Streamlit customer-support assistant built around retrieval-augmented generation (RAG). It searches the repository's knowledge documents using the existing FAISS index and local `sentence-transformers/all-MiniLM-L6-v2` embeddings. When configured, it sends retrieved evidence and the question to NVIDIA's OpenAI-compatible hosted chat API. Answers are instructed to cite retrieved passages; the application refuses weak matches and rejects missing or unknown citation markers.
 
-Unlike generic chatbots, HelpDesk AI will **never answer outside its knowledge base** — ensuring every response is grounded in your actual documentation.
-
----
+The quality of the answers depends on the contents of the knowledge base, the embedding/index compatibility, retrieval behavior, and the configured model. Citations and retrieval labels are not guarantees that an answer is correct. Review answers before using them for high-impact support decisions.
 
 ## Features
 
-- **RAG Pipeline** — Semantic search over your documents with FAISS vector indexing
-- **Hallucination Prevention** — Strict context-only response generation via engineered prompts
-- **Source Citations** — Every answer shows which documents were referenced
-- **Confidence Scoring** — L2-distance-based confidence metrics displayed in real time
-- **Professional Dashboard** — Dark enterprise theme with live analytics sidebar
-- **Chat Export** — Download full conversation history as a text file
-- **Modular Architecture** — Clean separation of config, ingestion, RAG engine, and UI
-- **Error Resilience** — Graceful handling of missing tokens, corrupted indexes, and network failures
-- **Production-Ready** — Type hints, docstrings, logging, and PEP 8 compliance throughout
-
----
+- Semantic retrieval over the existing FAISS index and text knowledge base.
+- Grounded response instructions, explicit out-of-scope refusal, and evidence citations.
+- NVIDIA-compatible chat-completions client with configurable model ID, bounded timeout/retries, and safe error categories.
+- Premium responsive Streamlit chat UI, starter questions, status panel, session metrics, clear-chat, and text export.
+- Input validation and bounded per-session conversation history.
+- Local/offline automated tests for validation, RAG evidence/citations, and mocked provider success/failure paths.
+- No NVIDIA model ID is assumed. Configure an exact model ID supported by your NVIDIA account.
 
 ## Architecture
 
-```
-┌──────────────┐     ┌───────────────┐     ┌──────────────┐
-│   User       │────▶│  Streamlit    │────▶│  RAG Engine  │
-│   Interface  │◀────│   app.py      │◀────│  rag.py      │
-└──────────────┘     └───────────────┘     └──────┬───────┘
-                                                  │
-                              ┌───────────────────┼───────────────────┐
-                              │                   │                   │
-                       ┌──────▼──────┐    ┌───────▼──────┐    ┌──────▼──────┐
-                       │   FAISS     │    │  HuggingFace │    │   Prompt    │
-                       │  Vector DB  │    │  Inference   │    │  Template   │
-                       └──────┬──────┘    │  API (LLM)   │    └─────────────┘
-                              │            └──────────────┘
-                       ┌──────▼──────┐
-                       │  Sentence   │
-                       │ Transformers│
-                       │ (Embeddings)│
-                       └─────────────┘
+```text
+Streamlit UI (app.py)
+  └── Input/session policy
+      └── RAG service (utils/rag.py)
+          ├── Existing FAISS index + local Hugging Face sentence embeddings
+          ├── Weak-match abstention and source-ID mapping
+          └── NVIDIA OpenAI-compatible API (utils/nvidia_client.py)
+
+Offline ingestion: ingest.py → source documents → chunks → embeddings → FAISS
 ```
 
-### How RAG Works
+### Knowledge and index compatibility
 
-1. **Ingestion** — Knowledge-base `.txt` files are split into chunks and embedded into a FAISS vector index using sentence-transformers.
-2. **Retrieval** — When a user asks a question, the query is embedded and the top-K most similar chunks are retrieved via L2-distance search.
-3. **Generation** — Retrieved chunks are injected into a carefully engineered prompt and sent to the LLM, which produces a grounded answer.
+The existing `data/*.txt` documents and `faiss_index/index.faiss` / `index.pkl` are preserved. Do not change the embedding model without rebuilding and evaluating the index. The checked-in LangChain FAISS persistence includes a pickle-based docstore; only load trusted repository-built artifacts. Do not upload or load user-provided pickle indexes. The application does not automatically rebuild/overwrite the index at web startup.
 
----
+## Repository structure
 
-## Folder Structure
+```text
+app.py                 Streamlit UI
+config.py              Environment and Streamlit Secrets configuration
+ingest.py              Offline FAISS ingestion
+requirements.txt       Runtime dependencies
+requirements-dev.txt   Test and lint tools
+.env.example           Non-secret local configuration template
+README.md              Project and setup documentation
+LICENSE                Existing MIT license
 
-```
-HelpDesk-AI-Enterprise-RAG-Assistant/
-├── app.py                # Streamlit chat interface
-├── ingest.py             # Builds the FAISS vector database
-├── config.py             # Centralized configuration
-├── requirements.txt      # Python dependencies
-├── README.md             # This file
-├── LICENSE               # MIT License
-├── .gitignore            # Git ignore rules
-├── .env.example          # Environment variable template
-├── .env                  # Your secrets (never committed)
-│
-├── data/                 # Knowledge-base documents
-│   ├── faq.txt
-│   ├── shipping.txt
-│   └── return_policy.txt
-│
-├── faiss_index/          # Generated vector index
-│   ├── index.faiss
-│   └── index.pkl
-│
-├── utils/                # Utility modules
-│   ├── __init__.py
-│   ├── helpers.py        # Helper functions
-│   ├── prompts.py        # Prompt templates
-│   └── rag.py            # RAG engine core
-│
-├── assets/               # Images and media
-└── logs/                 # Application logs
+data/                  Existing knowledge-base text files
+faiss_index/           Existing FAISS and LangChain docstore artifacts
+utils/rag.py           Retrieval, abstention, citations, and generation
+utils/nvidia_client.py NVIDIA-compatible API client
+utils/input_policy.py  Question and session bounds
+utils/prompts.py       Grounded response policy
+utils/helpers.py       Chat export and shared helpers
+tests/                 Offline unit tests
 ```
 
----
+## Installation and local setup
 
-## Tech Stack
-
-| Layer            | Technology                          |
-| ---------------- | ----------------------------------- |
-| UI               | Streamlit 1.45+                     |
-| LLM              | Qwen/Qwen2.5-7B-Instruct (HF API)  |
-| Embeddings       | all-MiniLM-L6-v2 (Sentence TF)     |
-| Vector Store     | FAISS (Facebook AI)                |
-| Orchestration    | LangChain 0.3+                     |
-| Environment      | python-dotenv                      |
-| Language         | Python 3.10+                       |
-
----
-
-## Installation
-
-### Prerequisites
-
-- Python 3.10 or newer
-- A [Hugging Face](https://huggingface.co/) account with an API token
-- (Optional) GPU for local inference
-
-### Steps
+Python 3.10+ is required. The local embedding model is fetched through the Hugging Face ecosystem when first initialized; the LLM itself is not downloaded or run locally.
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/helpdesk-ai-enterprise-rag-assistant.git
-cd helpdesk-ai-enterprise-rag-assistant
+git clone https://github.com/Kraverse/HelpDesk-AI-Enterprise-RAG-Assistant.git
+cd HelpDesk-AI-Enterprise-RAG-Assistant
 
-# 2. Create and activate a virtual environment
 python -m venv .venv
-source .venv/bin/activate    # Linux / macOS
-# .venv\Scripts\activate     # Windows
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
+cp .env.example .env                 # optional; never commit .env
+```
 
-# 3. Install dependencies
-pip install -r requirements.txt
+Set `NVIDIA_MODEL` to the exact supported model ID confirmed for your NVIDIA API account. Set `NVIDIA_API_KEY` in `.env` for local use or in Streamlit Community Cloud Secrets for deployment. **Do not paste credentials into source code, commit history, logs, or chat.** Without both settings, the app can initialize local retrieval but answer generation reports a safe configuration message.
 
-# 4. Configure environment variables
-cp .env.example .env
-# Edit .env and paste your Hugging Face token
-
-# 5. Build the vector database
-python ingest.py
-
-# 6. Launch the application
+```bash
 streamlit run app.py
 ```
 
----
+### Existing FAISS index
 
-## Environment Variables
+The index is checked in. On first initialization, the local embedding model must be available and compatible. If the artifacts are missing or fail to load, review the error and the embedding/index provenance before running `python ingest.py`; preserve a backup of the existing index before any re-ingestion. Re-ingest only after reviewing the source corpus and model/chunk settings.
 
-| Variable   | Description                        | Required |
-| ---------- | ---------------------------------- | -------- |
-| `HF_TOKEN` | Your Hugging Face API access token | Yes      |
+## Configuration
 
-Get your token from [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+| Variable | Purpose | Default / required |
+|---|---|---|
+| `NVIDIA_API_KEY` | Secret for server-side NVIDIA hosted inference | Required only for live generation |
+| `NVIDIA_MODEL` | Exact chat model identifier accepted by your NVIDIA account | **No default; configure explicitly** |
+| `NVIDIA_BASE_URL` | OpenAI-compatible NVIDIA API base URL | `https://integrate.api.nvidia.com/v1` |
+| `NVIDIA_TIMEOUT_SECONDS` | Upper-bounded request timeout | `30` seconds |
+| `NVIDIA_MAX_RETRIES` | Bounded retry count | `1` |
+| `EMBEDDING_MODEL` | Local query/document embedding model | `sentence-transformers/all-MiniLM-L6-v2` |
+| `FAISS_PATH` | FAISS artifact directory | `faiss_index` |
+| `TOP_K` | Maximum retrieved passages (bounded by app) | `3` |
+| `MAX_L2_DISTANCE` | Weak-match cutoff in the current FAISS distance space | `1.5`; evaluate/calibrate before changing |
+| `MAX_QUESTION_CHARS` | Input length bound | `1000` |
+| `MAX_CHAT_MESSAGES` | Maximum retained session messages | `40` |
+| `MAX_SESSION_CHARS` | Maximum retained session text | `30000` |
+| `SESSION_REQUESTS_PER_MINUTE` | Session-local request ceiling | `20` |
+| `ASK_KRAVERSE_URL` | Optional, verified HTTPS link to existing assistant | Unset until canonical URL is confirmed |
 
----
+The NVIDIA endpoint and API protocol are configurable, but this repository intentionally does not guess a model ID. The inspected `MedRag-X` project used Groq rather than NVIDIA; it is not a source for NVIDIA model configuration.
 
-## Deployment
+The `ASK_KRAVERSE_URL` setting is blank by default. The app only renders a link when a valid HTTPS URL is explicitly configured. Do not set it until the assistant's canonical address is verified; iframe embedding or API integration has not been established.
 
-### Streamlit Community Cloud
+## Deployment: Streamlit Community Cloud
+
+Keep the current Streamlit deployment unless a separately reviewed migration is justified.
+
+1. Confirm the app's repository and branch selection before changing deployment configuration. `master` contains the app in the inspected repository; `main` has historically contained only a README.
+2. Deploy from the reviewed feature branch/PR only after the required checks pass and the repository owner approves the change.
+3. In the app's **Settings → Secrets**, configure `NVIDIA_API_KEY` and the confirmed `NVIDIA_MODEL`. Do not put secrets in GitHub Actions variables unless the workflow requires them.
+4. Verify the deployment's build logs and perform a live end-to-end smoke query with known evidence. A successful build alone does not verify retrieval or generation.
+5. Preserve the prior deployment revision and existing index so the deployment can be rolled back.
+
+The app does not store durable chat history; the transcript and counters are session state. The request ceiling is per Streamlit session, not a substitute for account-wide abuse prevention. Questions and retrieved evidence are sent to NVIDIA when generation is enabled. Avoid entering sensitive personal or payment information.
+
+## Tests
+
+The test suite uses no live API key or network calls; provider requests are mocked.
 
 ```bash
-# requirements.txt already includes all dependencies
-# Set HF_TOKEN as a Streamlit Community Cloud secret
-# Deploy directly from your GitHub repo
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m compileall -q app.py config.py ingest.py utils tests
 ```
 
-### Hugging Face Spaces
-
-```bash
-# Create a new Space with Streamlit SDK
-# Add HF_TOKEN as a Space secret
-# Push your code
-```
-
-### Render / Railway
-
-```bash
-# Add a start command: streamlit run app.py --server.port $PORT
-# Set HF_TOKEN as an environment variable
-```
-
----
+Tests cover input/session/request bounds, provider payload/auth/error sanitization, retrieval abstention, citation validation, and Streamlit AppTest flows for starter questions, chat input, export, and clearing a session. They do not replace a real compatibility check of the committed FAISS artifacts or a live NVIDIA smoke test after configuration.
 
 ## Screenshots
 
-<!-- Add screenshots here after deployment
+<!-- Add current screenshots after a reviewed deployment.
 <img src="assets/screenshot-1.png" alt="Chat Interface" width="800" />
 <img src="assets/screenshot-2.png" alt="Dashboard Sidebar" width="300" />
 -->
 
----
-
-## Future Improvements
-
-- [ ] Multi-format document support (PDF, DOCX, Markdown)
-- [ ] Conversation memory with session history
-- [ ] Admin panel for knowledge-base management
-- [ ] A/B testing for prompt templates
-- [ ] Rate limiting and usage analytics
-- [ ] Multi-language support
-- [ ] Integration with ticketing systems (Zendesk, Freshdesk)
-- [ ] Local LLM fallback (Ollama / llama.cpp)
-
----
-
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m 'Add my feature'`
-4. Push to the branch: `git push origin feature/my-feature`
-5. Open a Pull Request
+1. Create a feature branch from the current application branch.
+2. Keep secrets and generated customer data out of commits.
+3. Run the tests and include actual test output in the pull request.
+4. Explain any changes to the knowledge documents, embedding model, or FAISS index.
+5. Open a pull request; do not deploy directly from an unreviewed branch.
 
-Please ensure your code passes `ruff check .` and includes appropriate docstrings.
-
----
+Please run `ruff check .` where available and include appropriate tests and documentation.
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the preserved [LICENSE](LICENSE) file for details.
 
 ---
 
-<p align="center">
-  Built with ❤️ using Streamlit, LangChain & FAISS
-</p>
+<p align="center">Built with Streamlit, LangChain, FAISS, and configurable inference providers</p>

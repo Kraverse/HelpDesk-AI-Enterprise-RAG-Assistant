@@ -5,9 +5,6 @@ Utility helper functions for HelpDesk AI.
 import os
 import time
 from datetime import datetime
-from typing import List, Tuple, Optional
-
-from langchain_core.documents import Document
 
 
 def get_time() -> str:
@@ -25,7 +22,7 @@ def ensure_folder(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-def format_sources(documents: List[Document]) -> List[str]:
+def format_sources(documents: list[object]) -> list[str]:
     """Extract unique source filenames from retrieved documents.
 
     Args:
@@ -39,7 +36,8 @@ def format_sources(documents: List[Document]) -> List[str]:
     seen: set[str] = set()
     sources: list[str] = []
     for doc in documents:
-        src = doc.metadata.get("source", "Unknown")
+        metadata = getattr(doc, "metadata", {})
+        src = metadata.get("source", "Unknown")
         if src not in seen:
             seen.add(src)
             sources.append(src)
@@ -47,7 +45,7 @@ def format_sources(documents: List[Document]) -> List[str]:
 
 
 def save_chat(
-    chat_history: List[dict],
+    chat_history: list[dict],
     filename: str = "chat_history.txt",
 ) -> str:
     """Write the conversation to a text file.
@@ -62,7 +60,7 @@ def save_chat(
     ensure_folder(os.path.dirname(filename) or ".")
 
     with open(filename, "w", encoding="utf-8") as fh:
-        fh.write(f"HelpDesk AI — Chat Export\n")
+        fh.write("HelpDesk AI — Chat Export\n")
         fh.write(f"Exported: {get_time()}\n")
         fh.write("=" * 50 + "\n\n")
 
@@ -74,7 +72,7 @@ def save_chat(
     return filename
 
 
-def chat_history_to_string(chat_history: List[dict]) -> str:
+def chat_history_to_string(chat_history: list[dict]) -> str:
     """Serialize chat history into a downloadable text string.
 
     Args:
@@ -94,6 +92,12 @@ def chat_history_to_string(chat_history: List[dict]) -> str:
         content = entry.get("content", "")
         lines.append(f"[{role.upper()}]")
         lines.append(content)
+        citations = entry.get("citations", [])
+        if citations:
+            lines.append("Sources: " + ", ".join(
+                str(item.get("source", "Unknown")) for item in citations
+                if isinstance(item, dict)
+            ))
         lines.append("")
     return "\n".join(lines)
 
