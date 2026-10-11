@@ -89,3 +89,13 @@ def test_resume_projects_question_returns_source_citation(monkeypatch):
     assert "MedRAG-X" in response.answer
     assert "HelpDesk AI" in response.answer
     assert response.citations == [{"id": "S1", "source": "Uploaded: synthetic_resume.txt"}]
+
+
+def test_resume_query_without_upload_does_not_search_base_index(monkeypatch):
+    base = FakeStore([(doc("Generic company support information.", "support.txt"), 0.1)])
+    monkeypatch.setattr(rag, "_vector_store", base)
+
+    response = rag.query("Summarize my resume", uploaded_store=None)
+
+    assert "Upload and process your resume" in response.error
+    assert base.calls == []
