@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -17,6 +18,8 @@ from config import (
     MAX_UPLOAD_DOCUMENTS,
     MAX_UPLOAD_FILE_BYTES,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_PDF_PAGES = 200
 
@@ -64,6 +67,7 @@ def parse_uploaded_file(filename: str, content: bytes) -> UploadResult:
         return UploadResult(name, "unreadable", digest, message="The file could not be read as a valid PDF/TXT document.")
 
     if not text:
+        logger.info("Upload extraction diagnostics: file_type=%s extracted_chars=0 chunks=0 status=empty", suffix)
         message = "No extractable text was found in the document. Scanned/image-only PDFs are not OCR processed."
         return UploadResult(name, "empty", digest, message=message)
 
@@ -75,6 +79,11 @@ def parse_uploaded_file(filename: str, content: bytes) -> UploadResult:
     source = f"Uploaded: {name}"
     document = Document(page_content=text, metadata={"source": source, "upload_sha256": digest})
     chunks = splitter.split_documents([document])
+    # Log only aggregate metadata; never log document text or personally identifying filenames.
+    logger.info(
+        "Upload extraction diagnostics: file_type=%s extracted_chars=%d chunks=%d status=processed",
+        suffix, len(text), len(chunks),
+    )
     return UploadResult(name, "processed", digest, chunks, f"Processed into {len(chunks)} chunks.")
 
 
@@ -115,4 +124,11 @@ def build_uploaded_index(chunks: Iterable[Document], embeddings: Any) -> Any | N
         return None
     from langchain_community.vectorstores import FAISS
 
-    return FAISS.from_documents(documents=documents, embedding=embeddings)
+    store = FAISS.from_documents(documents=documents, embedding=embeddings)
+    logger.info(
+        "Uploaded FAISS index diagnostics: chunks=%d embedding_dimension=%s metric=%s",
+        len(documents),
+        getattr(getattr(store, "index", None), "d", "unknown"),
+        getattr(getattr(store, "index", None), "metric_type", "unknown"),
+    )
+    return store
