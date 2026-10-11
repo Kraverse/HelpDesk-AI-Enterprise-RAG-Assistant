@@ -1,310 +1,60 @@
-"""
-==========================================================
-HelpDesk AI – Enterprise RAG Assistant
+"""HelpDesk AI Streamlit interface."""
 
-Streamlit Application — Professional Chat Interface
-==========================================================
-"""
+from __future__ import annotations
 
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any, List
+from urllib.parse import urlparse
 
 import streamlit as st
 
-# ---------------------------------------------------------------------------
-# Ensure the project root is on sys.path so sibling imports work everywhere
-# ---------------------------------------------------------------------------
-ROOT_DIR = Path(__file__).parent.resolve()
+ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from config import (
     APP_NAME,
     APP_SUBTITLE,
-    LLM_REPO,
+    ASK_KRAVERSE_URL,
     EMBEDDING_MODEL,
-    FAISS_PATH,
+    LLM_REPO,
+    MAX_CHAT_MESSAGES,
+    MAX_QUESTION_CHARS,
+    OPENROUTER_MODEL,
 )
-from utils.rag import initialize_system, query as rag_query
-from utils.helpers import (
-    get_time,
-    response_time,
-    format_sources,
-    chat_history_to_string,
-    get_confidence_color,
-)
-
-# ============================================================
-# Page Configuration
-# ============================================================
+from utils.helpers import chat_history_to_string, get_time
+from utils.input_policy import bound_history, register_request, validate_question
+from utils.rag import initialize_system
+from utils.rag import query as rag_query
 
 st.set_page_config(
     page_title=f"{APP_NAME} — {APP_SUBTITLE}",
-    page_icon="🤖",
+    page_icon="✦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ============================================================
-# Custom CSS — Dark Enterprise Theme
-# ============================================================
-
-CUSTOM_CSS = """
-/* ---- Global ---- */
-[data-testid="stAppViewContainer"] {
-    background-color: #0d1117;
-}
-
-/* ---- Sidebar ---- */
-section[data-testid="stSidebar"] {
-    background-color: #161b22;
-    border-right: 1px solid #30363d;
-}
-section[data-testid="stSidebar"] * {
-    color: #c9d1d9 !important;
-}
-
-/* ---- Main Area ---- */
-[data-testid="stMain"] {
-    background-color: #0d1117;
-}
-
-/* ---- Chat Input ---- */
-[data-testid="stChatInput"] {
-    background-color: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 12px;
-}
-[data-testid="stChatInput"] textarea {
-    color: #e6edf3 !important;
-    background-color: transparent !important;
-}
-
-/* ---- Headers ---- */
-h1, h2, h3, h4, h5, h6 {
-    color: #e6edf3 !important;
-}
-
-/* ---- Status Cards ---- */
-.status-card {
-    background-color: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 12px 16px;
-    margin: 6px 0;
-}
-
-.status-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 6px 0;
-    font-size: 14px;
-}
-
-.status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-
-.dot-ready { background-color: #3fb950; box-shadow: 0 0 6px #3fb95088; }
-.dot-error { background-color: #f85149; box-shadow: 0 0 6px #f8514988; }
-.dot-warn  { background-color: #d29922; box-shadow: 0 0 6px #d2992288; }
-
-/* ---- Metric Tiles ---- */
-.metrics-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin: 8px 0;
-}
-
-.metric-tile {
-    background-color: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 10px 12px;
-    text-align: center;
-}
-
-.metric-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: #58a6ff;
-    line-height: 1.2;
-}
-
-.metric-label {
-    font-size: 10px;
-    color: #8b949e;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-top: 2px;
-}
-
-/* ---- Source Badges ---- */
-.source-badge {
-    display: inline-block;
-    background-color: rgba(31, 111, 235, 0.15);
-    color: #58a6ff;
-    padding: 3px 12px;
-    border-radius: 12px;
-    font-size: 12px;
-    margin: 2px 4px 2px 0;
-    border: 1px solid rgba(31, 111, 235, 0.25);
-}
-
-/* ---- Confidence Bar ---- */
-.confidence-track {
-    width: 100%;
-    height: 6px;
-    background-color: #21262d;
-    border-radius: 3px;
-    overflow: hidden;
-    margin: 4px 0 2px;
-}
-
-.confidence-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.6s ease;
-}
-
-/* ---- Meta Row (time + confidence) ---- */
-.meta-row {
-    display: flex;
-    gap: 16px;
-    align-items: center;
-    margin-top: 8px;
-    font-size: 12px;
-    color: #8b949e;
-}
-
-.meta-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-/* ---- Typing Animation ---- */
-@keyframes pulse-dot {
-    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
-    40% { opacity: 1; transform: scale(1); }
-}
-
-.typing-indicator span {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: #58a6ff;
-    margin: 0 3px;
-    animation: pulse-dot 1.4s infinite ease-in-out;
-}
-
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-
-/* ---- Suggested Question Buttons ---- */
-.suggested-btn button {
-    background-color: #161b22 !important;
-    border: 1px solid #30363d !important;
-    color: #58a6ff !important;
-    border-radius: 20px !important;
-    padding: 8px 18px !important;
-    font-size: 13px !important;
-    text-align: left !important;
-    transition: all 0.2s ease !important;
-    width: 100% !important;
-}
-.suggested-btn button:hover {
-    background-color: rgba(31, 111, 235, 0.12) !important;
-    border-color: #58a6ff !important;
-    color: #79c0ff !important;
-}
-
-/* ---- Action Buttons ---- */
-.action-btn button {
-    width: 100%;
-    border: 1px solid #30363d !important;
-    border-radius: 8px !important;
-    padding: 8px 16px !important;
-    font-size: 14px !important;
-    transition: all 0.2s ease !important;
-}
-
-/* ---- Hide Default Chrome ---- */
-header[data-testid="stHeader"] {
-    background-color: rgba(13, 17, 23, 0.8);
-    backdrop-filter: blur(12px);
-}
-[data-testid="stToolbar"] {
-    visibility: hidden;
-}
-footer[data-testid="stFooter"] {
-    background-color: #0d1117;
-    padding: 8px 0;
-}
-
-/* ---- Scrollbar ---- */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #484f58; }
-
-/* ---- Divider ---- */
-.sidebar-divider {
-    border: none;
-    border-top: 1px solid #30363d;
-    margin: 16px 0;
-}
-
-/* ---- Tech tag ---- */
-.tech-tag {
-    display: inline-block;
-    background-color: rgba(31, 111, 235, 0.1);
-    color: #8b949e;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-family: monospace;
-    margin: 2px 0;
-}
+CSS = """
+<style>
+:root { --ink:#17223b; --muted:#68758b; --accent:#5b68df; --surface:#fff; --line:#e6eaf2; }
+[data-testid="stAppViewContainer"] { background:linear-gradient(135deg,#f6f8fc 0%,#f2f5fb 55%,#f8f7ff 100%); color:var(--ink); }
+[data-testid="stSidebar"] { background:#fff; border-right:1px solid var(--line); }
+.block-container { max-width:1120px; padding-top:2rem; padding-bottom:2rem; }
+.hero { padding:1.5rem 1.7rem; border:1px solid #e7eafd; border-radius:22px; background:linear-gradient(110deg,#fff 0%,#f4f6ff 100%); box-shadow:0 14px 42px rgba(36,49,96,.06); margin-bottom:1.25rem; }
+.hero h1 { font-size:2rem; letter-spacing:-.04em; margin:0; color:#182542; }
+.hero p { color:#68758b; margin:.45rem 0 0; }
+[data-testid="stChatMessage"] { border:1px solid var(--line); border-radius:18px; background:rgba(255,255,255,.92); box-shadow:0 7px 24px rgba(29,43,81,.04); }
+[data-testid="stChatInput"] { border-color:#dce2f2; border-radius:16px; box-shadow:0 8px 26px rgba(42,56,105,.08); }
+.stButton>button, .stDownloadButton>button, .stLinkButton> a { border-radius:12px!important; }
+[data-testid="stMetric"] { border:1px solid var(--line); background:#fff; border-radius:14px; padding:.6rem .85rem; }
+.small-muted { color:#68758b; font-size:.88rem; }
+@media (max-width:700px) { .block-container { padding:1rem .75rem 1.2rem; } .hero { padding:1.1rem; border-radius:16px; } .hero h1 {font-size:1.55rem;} }
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior:auto!important; animation:none!important; transition:none!important; } }
+</style>
 """
 
-
-def inject_custom_css() -> None:
-    """Inject the dark enterprise theme."""
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-
-# ============================================================
-# Session State
-# ============================================================
-
-def init_session_state() -> None:
-    """Seed session-state defaults on first run."""
-    defaults: Dict[str, Any] = {
-        "chat_history": [],
-        "question_count": 0,
-        "total_response_time": 0.0,
-        "system_initialized": False,
-        "system_status": {},
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-
-# ============================================================
-# Sidebar
-# ============================================================
-
-SUGGESTED_QUESTIONS: List[str] = [
+SUGGESTED_QUESTIONS = [
     "What are your business hours?",
     "How can I contact support?",
     "Do you ship internationally?",
@@ -314,347 +64,177 @@ SUGGESTED_QUESTIONS: List[str] = [
 ]
 
 
-def _status_icon(ready: bool, warning: bool = False) -> str:
-    """Return an HTML status dot."""
-    if warning:
-        return '<span class="status-dot dot-warn"></span>'
-    if ready:
-        return '<span class="status-dot dot-ready"></span>'
-    return '<span class="status-dot dot-error"></span>'
+def _verified_assistant_url(value: str) -> str | None:
+    """Only allow an explicitly configured HTTPS assistant URL."""
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.netloc and not parsed.username and not parsed.password:
+        return value
+    return None
 
 
-def render_sidebar(status: Dict[str, Any]) -> None:
-    """Draw the sidebar with dashboard, analytics, and actions."""
+def init_state() -> None:
+    defaults = {
+        "chat_history": [],
+        "question_count": 0,
+        "total_response_time": 0.0,
+        "system_initialized": False,
+        "system_status": {},
+        "request_timestamps": [],
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+    st.session_state.chat_history = bound_history(st.session_state.chat_history)
+
+
+def render_sources(citations: list[dict[str, str]]) -> None:
+    if not citations:
+        return
+    with st.expander("Sources and evidence", expanded=False):
+        for item in citations:
+            st.markdown(f"**[{item['id']}]** `{item['source']}`")
+
+
+def render_sidebar(status: dict) -> None:
     with st.sidebar:
-
-        # ---- Brand ----
-        st.markdown(
-            '<div style="margin: 4px 0 12px;">'
-            '<span style="font-size:24px;">🤖</span> '
-            '<span style="font-size:20px;font-weight:700;color:#e6edf3;">'
-            'HelpDesk AI</span><br>'
-            '<span style="font-size:12px;color:#8b949e;">'
-            'Enterprise RAG Assistant</span></div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
-
-        # ---- System Status ----
-        llm_is_token_issue = (
-            "TOKEN" in str(status.get("error", "")).upper()
-        )
-
-        st.markdown(
-            '<div class="status-card">'
-            '<div style="font-size:11px;color:#8b949e;'
-            'text-transform:uppercase;letter-spacing:1px;'
-            'margin-bottom:10px;">System Status</div>'
-
-            f'<div class="status-row">'
-            f'{_status_icon(status.get("embeddings_ready"))}'
-            f'<span>Embeddings</span></div>'
-
-            f'<div class="status-row">'
-            f'{_status_icon(status.get("index_ready"))}'
-            f'<span>Vector Index</span></div>'
-
-            f'<div class="status-row">'
-            f'{_status_icon(status.get("llm_ready"), warning=llm_is_token_issue)}'
-            f'<span>LLM</span></div>'
-
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
+        st.markdown("## ✦ HelpDesk AI")
+        st.caption("Enterprise RAG Assistant")
+        st.divider()
+        st.markdown("### System status")
+        st.write(f"Embeddings: {'Ready' if status.get('embeddings_ready') else 'Unavailable'}")
+        st.write(f"Knowledge index: {'Ready' if status.get('index_ready') else 'Unavailable'}")
+        st.write(f"Answer generation: {'Configured' if status.get('llm_ready') else 'Needs configuration'}")
         if status.get("error"):
-            st.caption(
-                f"⚠️ {status['error']}",
-            )
-
-        # ---- Knowledge Base ----
-        doc_count = status.get("doc_count", 0)
-        chunk_count = status.get("chunk_count", 0)
-
-        st.markdown(
-            '<div class="status-card">'
-            '<div style="font-size:11px;color:#8b949e;'
-            'text-transform:uppercase;letter-spacing:1px;'
-            'margin-bottom:8px;">Knowledge Base</div>'
-
-            f'<div style="font-size:13px;">📄 Documents: '
-            f'<b style="color:#58a6ff;">{doc_count}</b></div>'
-
-            f'<div style="font-size:13px;">🧩 Chunks: '
-            f'<b style="color:#58a6ff;">{chunk_count}</b></div>'
-
-            f'<div style="font-size:13px;">📊 Index: '
-            f'<b style="color:#58a6ff;">'
-            f'{"Ready" if status.get("index_ready") else "Missing"}'
-            f'</b></div>'
-
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        # ---- Analytics ----
-        q_count = st.session_state.get("question_count", 0)
-        avg_time = (
-            round(st.session_state["total_response_time"] / q_count, 2)
-            if q_count > 0
-            else 0.0
-        )
-
-        st.markdown(
-            '<div class="metrics-grid">'
-            '<div class="metric-tile">'
-            f'<div class="metric-value">{q_count}</div>'
-            '<div class="metric-label">Questions</div>'
-            '</div>'
-            '<div class="metric-tile">'
-            f'<div class="metric-value">{avg_time}s</div>'
-            '<div class="metric-label">Avg Time</div>'
-            '</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        # ---- Tech Stack ----
-        st.markdown(
-            '<div class="status-card">'
-            '<div style="font-size:11px;color:#8b949e;'
-            'text-transform:uppercase;letter-spacing:1px;'
-            'margin-bottom:8px;">Tech Stack</div>'
-
-            f'<div class="tech-tag">{status.get("llm_name", LLM_REPO)}</div><br>'
-            f'<div class="tech-tag">{status.get("embedding_model", EMBEDDING_MODEL)}</div>'
-
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
-
-        # ---- Actions ----
-        col_a, col_b = st.columns(2)
-
-        with col_a:
-            if st.button(
-                "🗑️ Clear Chat",
-                use_container_width=True,
-                key="clear_chat",
-            ):
-                st.session_state["chat_history"] = []
-                st.session_state["question_count"] = 0
-                st.session_state["total_response_time"] = 0.0
+            st.info(status["error"])
+        st.divider()
+        st.markdown("### Knowledge base")
+        st.caption(f"{status.get('doc_count', 0)} source documents · {status.get('chunk_count', 0)} indexed chunks")
+        st.caption(f"Embeddings: {EMBEDDING_MODEL}")
+        st.caption(f"LLM: {OPENROUTER_MODEL or LLM_REPO}")
+        if st.session_state.question_count:
+            average = st.session_state.total_response_time / st.session_state.question_count
+            left, right = st.columns(2)
+            left.metric("Questions", st.session_state.question_count)
+            right.metric("Avg time", f"{average:.2f}s")
+        link = _verified_assistant_url(ASK_KRAVERSE_URL)
+        if link:
+            st.link_button("Open Ask KraVerse AI", link, use_container_width=True)
+        elif ASK_KRAVERSE_URL:
+            st.caption("Ask KraVerse link is hidden because the configured URL is not a valid HTTPS URL.")
+        st.divider()
+        first, second = st.columns(2)
+        with first:
+            if st.button("Clear chat", use_container_width=True, key="clear_chat"):
+                st.session_state.chat_history = []
+                st.session_state.question_count = 0
+                st.session_state.total_response_time = 0.0
                 st.rerun()
-
-        with col_b:
-            if st.session_state.get("chat_history"):
-                export_text = chat_history_to_string(
-                    st.session_state["chat_history"]
-                )
+        with second:
+            if st.session_state.chat_history:
+                content = chat_history_to_string(st.session_state.chat_history)
                 st.download_button(
-                    label="💾 Save",
-                    data=export_text.encode("utf-8"),
+                    "Export", content.encode("utf-8"),
                     file_name=f"helpdesk-chat-{get_time().replace(' ', '-')}.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                    key="download_chat",
+                    mime="text/plain", use_container_width=True, key="download_chat",
                 )
-
-        # ---- Footer ----
-        st.markdown(
-            '<div style="margin-top:24px;text-align:center;'
-            'font-size:11px;color:#484f58;">'
-            'HelpDesk AI v2.0 · RAG-Powered<br>'
-            'Built with Streamlit + LangChain + FAISS'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+        st.caption(f"Session limit: {MAX_CHAT_MESSAGES} messages · {MAX_QUESTION_CHARS} chars/question")
 
 
-# ============================================================
-# Response Metadata Renderer
-# ============================================================
-
-def render_response_metadata(
-    sources: List[str],
-    confidence: float,
-    resp_time: float,
-) -> None:
-    """Show source badges, confidence bar, and response time."""
-    # Sources
-    if sources:
-        badges_html = " ".join(
-            f'<span class="source-badge">📄 {s}</span>' for s in sources
-        )
-        st.markdown(
-            f'<div style="margin-top:8px;">{badges_html}</div>',
-            unsafe_allow_html=True,
-        )
-
-    # Confidence + Time
-    color = get_confidence_color(confidence)
-    st.markdown(
-        f'<div class="meta-row">'
-        f'<div class="meta-item">'
-        f'<div class="confidence-track">'
-        f'<div class="confidence-fill" style="width:{confidence}%;'
-        f'background-color:{color};"></div>'
-        f'</div>'
-        f'<span>Confidence {confidence}%</span>'
-        f'</div>'
-        f'<div class="meta-item">⏱️ {resp_time}s</div>'
-        f'</div>',
-        unsafe_allow_html=True,
+def _handle_question(raw_question: str) -> bool:
+    question, validation_error = validate_question(raw_question)
+    if validation_error:
+        st.warning(validation_error)
+        return False
+    timestamps, allowed = register_request(
+        st.session_state.request_timestamps, time.monotonic()
     )
-
-
-# ============================================================
-# Chat Interface
-# ============================================================
-
-def render_chat() -> None:
-    """Draw the main chat area with history and input."""
-    # Title
-    st.markdown(
-        '<div style="margin: 16px 0 8px;">'
-        f'<span style="font-size:28px;font-weight:700;color:#e6edf3;">'
-        f'💬 {APP_NAME}</span><br>'
-        f'<span style="font-size:14px;color:#8b949e;">'
-        f'{APP_SUBTITLE} — Ask anything about our products and services</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Render history
-    for msg in st.session_state.chat_history:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        with st.chat_message(role):
-            st.markdown(content)
-            if role == "assistant":
-                render_response_metadata(
-                    sources=msg.get("sources", []),
-                    confidence=msg.get("confidence", 0.0),
-                    resp_time=msg.get("response_time", 0.0),
-                )
-                if msg.get("error"):
-                    st.caption(f"⚠️ {msg['error']}")
-
-    # Suggested questions (only when chat is empty)
-    if not st.session_state.chat_history:
-        st.markdown(
-            '<div style="margin: 20px 0 8px; font-size:13px; '
-            'color:#8b949e;">💡 Try asking:</div>',
-            unsafe_allow_html=True,
-        )
-        cols = st.columns(3)
-        for idx, question in enumerate(SUGGESTED_QUESTIONS):
-            with cols[idx % 3]:
-                if st.button(
-                    question,
-                    key=f"suggest_{idx}",
-                    use_container_width=True,
-                ):
-                    _handle_question(question)
-
-    # Chat input
-    if prompt := st.chat_input("Type your question here..."):
-        _handle_question(prompt)
-
-
-def _handle_question(prompt: str) -> None:
-    """Process a user question through the RAG pipeline."""
-    # User message
-    st.session_state.chat_history.append(
-        {"role": "user", "content": prompt}
-    )
-
+    st.session_state.request_timestamps = timestamps
+    if not allowed:
+        st.warning("This session has reached its request limit. Please wait a minute and try again.")
+        return False
+    st.session_state.chat_history.append({"role": "user", "content": question})
     with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Assistant thinking
+        st.markdown(question)
     with st.chat_message("assistant"):
-        thinking = st.empty()
-        thinking.markdown(
-            '<div class="typing-indicator">'
-            '<span></span><span></span><span></span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        start = time.time()
-        resp = rag_query(prompt)
-        elapsed = response_time(start)
-
-        thinking.empty()
-
-        if resp.answer:
-            st.markdown(resp.answer)
-
-        render_response_metadata(
-            sources=resp.sources,
-            confidence=resp.confidence,
-            resp_time=resp.response_time,
-        )
-
-        if resp.error:
-            st.caption(f"⚠️ {resp.error}")
-
-    # Persist in session state
-    st.session_state.chat_history.append(
-        {
-            "role": "assistant",
-            "content": resp.answer,
-            "sources": resp.sources,
-            "confidence": resp.confidence,
-            "response_time": resp.response_time,
-            "error": resp.error,
-        }
-    )
+        started = time.perf_counter()
+        with st.spinner("Searching the knowledge base and preparing a grounded answer…"):
+            try:
+                response = rag_query(question)
+            except Exception:  # noqa: BLE001 - UI boundary must not expose uncaught provider details.
+                # Never show the exception body (it may contain provider detail).
+                safe_error = "The request could not be completed. Please retry."
+                st.session_state.chat_history.append({
+                    "role": "assistant", "content": safe_error, "error": safe_error,
+                    "sources": [], "citations": [], "relevance": "Unavailable",
+                    "response_time": round(time.perf_counter() - started, 2),
+                })
+                st.session_state.chat_history = bound_history(st.session_state.chat_history)
+                st.warning(safe_error)
+                return True
+        elapsed = time.perf_counter() - started
+        if response.answer:
+            st.markdown(response.answer)
+        elif response.error:
+            st.warning(response.error)
+        render_sources(response.citations)
+        st.caption(f"{response.relevance} · {response.response_time:.2f}s")
+        if response.error:
+            st.info(response.error)
+    st.session_state.chat_history.append({
+        "role": "assistant",
+        "content": response.answer,
+        "sources": response.sources,
+        "citations": response.citations,
+        "relevance": response.relevance,
+        "response_time": response.response_time,
+        "error": response.error,
+    })
+    st.session_state.chat_history = bound_history(st.session_state.chat_history)
     st.session_state.question_count += 1
     st.session_state.total_response_time += elapsed
+    return True
 
 
-# ============================================================
-# Footer
-# ============================================================
-
-def render_footer() -> None:
-    """Application footer."""
+def render_chat() -> None:
     st.markdown(
-        '<div style="text-align:center;margin:32px 0 8px;'
-        'font-size:11px;color:#484f58;">'
-        'HelpDesk AI — Enterprise RAG Assistant · v2.0<br>'
-        'Retrieval-Augmented Generation · '
-        f'{get_time()}'
-        '</div>',
+        f'<div class="hero"><h1>{APP_NAME}</h1><p>{APP_SUBTITLE} · Answers are grounded in the configured help-center documents.</p></div>',
         unsafe_allow_html=True,
     )
+    if not st.session_state.chat_history:
+        st.markdown("#### What can I help you find?")
+        st.caption("Try a suggested question, or ask about policies, shipping, and support.")
+        cols = st.columns(3)
+        for index, question in enumerate(SUGGESTED_QUESTIONS):
+            with cols[index % 3]:
+                if (
+                    st.button(question, key=f"suggest_{index}", use_container_width=True)
+                    and _handle_question(question)
+                ):
+                    st.rerun()
+    for message in st.session_state.chat_history:
+        with st.chat_message(message.get("role", "user")):
+            st.markdown(message.get("content", ""))
+            if message.get("role") == "assistant":
+                render_sources(message.get("citations", []))
+                if message.get("relevance"):
+                    st.caption(f"{message['relevance']} · {message.get('response_time', 0):.2f}s")
+                if message.get("error"):
+                    st.info(message["error"])
+    prompt = st.chat_input("Ask a question about your help-center documents…")
+    if prompt and _handle_question(prompt):
+        st.rerun()
 
-
-# ============================================================
-# Main
-# ============================================================
 
 def main() -> None:
-    """Application entry point."""
-    inject_custom_css()
-    init_session_state()
-
-    # Bootstrap RAG on first run
+    st.markdown(CSS, unsafe_allow_html=True)
+    init_state()
     if not st.session_state.system_initialized:
-        with st.spinner("Initializing HelpDesk AI..."):
+        with st.spinner("Initializing local retrieval components…"):
             st.session_state.system_status = initialize_system()
             st.session_state.system_initialized = True
-
-    status = st.session_state.system_status
-    render_sidebar(status)
+    render_sidebar(st.session_state.system_status)
     render_chat()
-    render_footer()
+    st.caption("HelpDesk AI · Session-only chat history · Do not enter sensitive personal information.")
 
 
 if __name__ == "__main__":

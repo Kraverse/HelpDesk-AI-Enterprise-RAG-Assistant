@@ -1,0 +1,78 @@
+import io
+import json
+from urllib.error import HTTPError
+
+import pytest
+
+from utils import openrouter_client as client
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.body = json.dumps(body).encode()
+    def __enter__(self):
+        return self
+    def __exit__(self, *_args):
+        return False
+    def read(self):
+        return self.body
+
+
+def test_blank_model_is_rejected(monkeypatch):
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "secret")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "")
+    with pytest.raises(client.ProviderError, match="OPENROUTER_MODEL is not configured"):
+        client.chat_completion([{"role": "user", "content": "hello"}])
+
+
+def test_missing_api_key_is_clear_and_never_sends_request(monkeypatch):
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "urlopen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not call network")))
+    with pytest.raises(client.ProviderError, match="OPENROUTER_API_KEY is not configured"):
+        client.chat_completion([{"role": "user", "content": "question"}])
+
+
+def test_request_uses_configured_model_and_bearer_key(monkeypatch):
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "test-secret")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "OPENROUTER_MAX_RETRIES", 0)
+    captured = {}
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["auth"] = request.get_header("Authorization")
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads(request.data)
+        return FakeResponse({"choices": [{"message": {"content": "Grounded answer [S1]"}}]})
+    monkeypatch.setattr(client, "urlopen", fake_urlopen)
+    result = client.chat_completion([{"role": "user", "content": "question"}])
+    assert result.text == "Grounded answer [S1]"
+    assert result.model == "approved/model-id"
+    assert captured["auth"] == "Bearer test-secret"
+    assert captured["payload"]["model"] == "approved/model-id"
+    assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert captured["timeout"] > 0
+
+
+def test_http_errors_are_sanitized(monkeypatch):
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "never-log-this")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "OPENROUTER_MAX_RETRIES", 0)
+    def fail(*_args, **_kwargs):
+        raise HTTPError("https://example.invalid", 401, "Unauthorized", {}, io.BytesIO(b"never-log-this"))
+    monkeypatch.setattr(client, "urlopen", fail)
+    with pytest.raises(client.ProviderError) as error:
+        client.chat_completion([{"role": "user", "content": "question"}])
+    assert "authentication" in str(error.value)
+    assert "never-log-this" not in str(error.value)
+
+
+def test_invalid_json_is_sanitized(monkeypatch):
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "secret")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "OPENROUTER_MAX_RETRIES", 0)
+    class Invalid(FakeResponse):
+        def read(self): return b"not-json"
+    monkeypatch.setattr(client, "urlopen", lambda *_a, **_k: Invalid({}))
+    with pytest.raises(client.ProviderError, match="invalid response"):
+        client.chat_completion([{"role": "user", "content": "question"}])
