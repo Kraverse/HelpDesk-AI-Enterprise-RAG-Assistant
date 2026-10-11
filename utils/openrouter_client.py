@@ -1,4 +1,4 @@
-"""Small server-side client for NVIDIA's OpenAI-compatible chat completions API."""
+"""Small server-side client for OpenRouter's OpenAI-compatible chat completions API."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from urllib.request import Request, urlopen
 
 from config import (
     MAX_NEW_TOKENS,
-    NVIDIA_API_KEY,
-    NVIDIA_BASE_URL,
-    NVIDIA_MAX_RETRIES,
-    NVIDIA_MODEL,
-    NVIDIA_TIMEOUT_SECONDS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MAX_RETRIES,
+    OPENROUTER_MODEL,
+    OPENROUTER_TIMEOUT_SECONDS,
     TEMPERATURE,
 )
 
@@ -39,38 +39,38 @@ class Completion:
 
 
 def chat_completion(messages: list[dict[str, str]]) -> Completion:
-    """Call the configured NVIDIA endpoint. Model ID is never guessed."""
-    if not NVIDIA_API_KEY:
-        raise ProviderError("NVIDIA API key is not configured")
-    if not NVIDIA_MODEL:
-        raise ProviderError("NVIDIA model is not configured")
+    """Call the configured OpenRouter endpoint."""
+    if not OPENROUTER_API_KEY:
+        raise ProviderError("OPENROUTER_API_KEY is not configured")
+    if not OPENROUTER_MODEL:
+        raise ProviderError("OPENROUTER_MODEL is not configured")
 
     payload = json.dumps({
-        "model": NVIDIA_MODEL,
+        "model": OPENROUTER_MODEL,
         "messages": messages,
         "temperature": TEMPERATURE,
         "max_tokens": MAX_NEW_TOKENS,
         "stream": False,
     }).encode("utf-8")
     request = Request(
-        f"{NVIDIA_BASE_URL}/chat/completions",
+        f"{OPENROUTER_BASE_URL}/chat/completions",
         data=payload,
-        headers={"Authorization": f"Bearer {NVIDIA_API_KEY}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
         method="POST",
     )
 
-    for attempt in range(NVIDIA_MAX_RETRIES + 1):
+    for attempt in range(OPENROUTER_MAX_RETRIES + 1):
         try:
-            with urlopen(request, timeout=NVIDIA_TIMEOUT_SECONDS) as response:
+            with urlopen(request, timeout=OPENROUTER_TIMEOUT_SECONDS) as response:
                 result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
             choices = result.get("choices") or []
             text = choices[0].get("message", {}).get("content", "").strip() if choices else ""
             if not text:
-                raise ProviderError("NVIDIA returned an empty response")
-            return Completion(text=text, model=NVIDIA_MODEL)
+                raise ProviderError("OpenRouter returned an empty response")
+            return Completion(text=text, model=OPENROUTER_MODEL)
         except HTTPError as exc:
             if exc.code == 429:
-                if attempt < NVIDIA_MAX_RETRIES:
+                if attempt < OPENROUTER_MAX_RETRIES:
                     retry_after = exc.headers.get("Retry-After", "1") if exc.headers else "1"
                     try:
                         delay = min(max(float(retry_after), 0), 3)
@@ -78,20 +78,20 @@ def chat_completion(messages: list[dict[str, str]]) -> Completion:
                         delay = 1
                     time.sleep(delay)
                     continue
-                raise ProviderError("NVIDIA rate limit reached", retryable=True) from None
+                raise ProviderError("OpenRouter rate limit reached", retryable=True) from None
             if exc.code in (401, 403):
-                raise ProviderError("NVIDIA authentication or access was rejected") from None
+                raise ProviderError("OpenRouter authentication or access was rejected") from None
             if exc.code >= 500:
-                if attempt < NVIDIA_MAX_RETRIES:
+                if attempt < OPENROUTER_MAX_RETRIES:
                     time.sleep(0.25 * (attempt + 1))
                     continue
-                raise ProviderError("NVIDIA service is temporarily unavailable", retryable=True) from None
-            raise ProviderError("NVIDIA rejected the request") from None
+                raise ProviderError("OpenRouter service is temporarily unavailable", retryable=True) from None
+            raise ProviderError("OpenRouter rejected the request") from None
         except (TimeoutError, URLError):
-            if attempt < NVIDIA_MAX_RETRIES:
+            if attempt < OPENROUTER_MAX_RETRIES:
                 time.sleep(0.25 * (attempt + 1))
                 continue
-            raise ProviderError("NVIDIA request timed out or could not connect", retryable=True) from None
+            raise ProviderError("OpenRouter request timed out or could not connect", retryable=True) from None
         except (json.JSONDecodeError, UnicodeDecodeError, KeyError, IndexError, AttributeError, TypeError):
-            raise ProviderError("NVIDIA returned an invalid response") from None
-    raise ProviderError("NVIDIA service is temporarily unavailable", retryable=True)
+            raise ProviderError("OpenRouter returned an invalid response") from None
+    raise ProviderError("OpenRouter service is temporarily unavailable", retryable=True)

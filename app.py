@@ -21,7 +21,7 @@ from config import (
     LLM_REPO,
     MAX_CHAT_MESSAGES,
     MAX_QUESTION_CHARS,
-    NVIDIA_MODEL,
+    OPENROUTER_MODEL,
 )
 from utils.helpers import chat_history_to_string, get_time
 from utils.input_policy import bound_history, register_request, validate_question
@@ -110,7 +110,7 @@ def render_sidebar(status: dict) -> None:
         st.markdown("### Knowledge base")
         st.caption(f"{status.get('doc_count', 0)} source documents · {status.get('chunk_count', 0)} indexed chunks")
         st.caption(f"Embeddings: {EMBEDDING_MODEL}")
-        st.caption(f"LLM: {NVIDIA_MODEL or LLM_REPO}")
+        st.caption(f"LLM: {OPENROUTER_MODEL or LLM_REPO}")
         if st.session_state.question_count:
             average = st.session_state.total_response_time / st.session_state.question_count
             left, right = st.columns(2)

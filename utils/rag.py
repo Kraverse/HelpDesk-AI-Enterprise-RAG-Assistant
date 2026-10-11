@@ -14,13 +14,13 @@ from config import (
     EMBEDDING_MODEL,
     FAISS_PATH,
     MAX_L2_DISTANCE,
-    NVIDIA_API_KEY,
-    NVIDIA_MODEL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_MODEL,
     TOP_K,
     validate_settings,
 )
 from utils.input_policy import validate_question
-from utils.nvidia_client import ProviderError, chat_completion
+from utils.openrouter_client import ProviderError, chat_completion
 from utils.prompts import REFUSAL, SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -86,8 +86,8 @@ def initialize_system() -> dict[str, Any]:
     status: dict[str, Any] = {
         "embeddings_ready": False,
         "index_ready": False,
-        "llm_ready": bool(NVIDIA_MODEL and NVIDIA_API_KEY),
-        "llm_name": NVIDIA_MODEL or "NVIDIA model not configured",
+        "llm_ready": bool(OPENROUTER_MODEL and OPENROUTER_API_KEY),
+        "llm_name": OPENROUTER_MODEL,
         "embedding_model": EMBEDDING_MODEL,
         "doc_count": 0,
         "chunk_count": 0,
@@ -113,10 +113,8 @@ def initialize_system() -> dict[str, Any]:
     status["doc_count"] = _doc_count
     if not status["index_ready"]:
         status["error"] = "The knowledge index is unavailable. Contact the application owner."
-    elif not NVIDIA_MODEL:
-        status["error"] = "NVIDIA_MODEL is not configured; generation is unavailable."
-    elif not NVIDIA_API_KEY:
-        status["error"] = "NVIDIA_API_KEY is not configured; generation is unavailable."
+    elif not OPENROUTER_API_KEY:
+        status["error"] = "OPENROUTER_API_KEY is not configured; answer generation is unavailable."
     return status
 
 
@@ -174,8 +172,8 @@ def query(question: str) -> RAGResponse:
         return response
     response.relevance = "Evidence retrieved; relevance is not a probability of correctness"
 
-    if not NVIDIA_MODEL:
-        response.error = "Answer generation is not configured. Please contact the application owner."
+    if not OPENROUTER_API_KEY:
+        response.error = "OPENROUTER_API_KEY is not configured; answer generation is unavailable."
         response.response_time = round(time.perf_counter() - started, 2)
         return response
 

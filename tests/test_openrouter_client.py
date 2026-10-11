@@ -4,7 +4,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from utils import nvidia_client as client
+from utils import openrouter_client as client
 
 
 class FakeResponse:
@@ -18,25 +18,25 @@ class FakeResponse:
         return self.body
 
 
-def test_model_must_be_explicit(monkeypatch):
-    monkeypatch.setattr(client, "NVIDIA_API_KEY", "secret")
-    monkeypatch.setattr(client, "NVIDIA_MODEL", "")
-    with pytest.raises(client.ProviderError, match="model is not configured"):
+def test_blank_model_is_rejected(monkeypatch):
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "secret")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "")
+    with pytest.raises(client.ProviderError, match="OPENROUTER_MODEL is not configured"):
         client.chat_completion([{"role": "user", "content": "hello"}])
 
 
 def test_missing_api_key_is_clear_and_never_sends_request(monkeypatch):
-    monkeypatch.setattr(client, "NVIDIA_API_KEY", "")
-    monkeypatch.setattr(client, "NVIDIA_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
     monkeypatch.setattr(client, "urlopen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not call network")))
-    with pytest.raises(client.ProviderError, match="API key is not configured"):
+    with pytest.raises(client.ProviderError, match="OPENROUTER_API_KEY is not configured"):
         client.chat_completion([{"role": "user", "content": "question"}])
 
 
 def test_request_uses_configured_model_and_bearer_key(monkeypatch):
-    monkeypatch.setattr(client, "NVIDIA_API_KEY", "test-secret")
-    monkeypatch.setattr(client, "NVIDIA_MODEL", "approved/model-id")
-    monkeypatch.setattr(client, "NVIDIA_MAX_RETRIES", 0)
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "test-secret")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "OPENROUTER_MAX_RETRIES", 0)
     captured = {}
     def fake_urlopen(request, timeout):
         captured["url"] = request.full_url
@@ -50,14 +50,14 @@ def test_request_uses_configured_model_and_bearer_key(monkeypatch):
     assert result.model == "approved/model-id"
     assert captured["auth"] == "Bearer test-secret"
     assert captured["payload"]["model"] == "approved/model-id"
-    assert captured["url"].endswith("/chat/completions")
+    assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
     assert captured["timeout"] > 0
 
 
 def test_http_errors_are_sanitized(monkeypatch):
-    monkeypatch.setattr(client, "NVIDIA_API_KEY", "never-log-this")
-    monkeypatch.setattr(client, "NVIDIA_MODEL", "approved/model-id")
-    monkeypatch.setattr(client, "NVIDIA_MAX_RETRIES", 0)
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "never-log-this")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "OPENROUTER_MAX_RETRIES", 0)
     def fail(*_args, **_kwargs):
         raise HTTPError("https://example.invalid", 401, "Unauthorized", {}, io.BytesIO(b"never-log-this"))
     monkeypatch.setattr(client, "urlopen", fail)
@@ -68,9 +68,9 @@ def test_http_errors_are_sanitized(monkeypatch):
 
 
 def test_invalid_json_is_sanitized(monkeypatch):
-    monkeypatch.setattr(client, "NVIDIA_API_KEY", "secret")
-    monkeypatch.setattr(client, "NVIDIA_MODEL", "approved/model-id")
-    monkeypatch.setattr(client, "NVIDIA_MAX_RETRIES", 0)
+    monkeypatch.setattr(client, "OPENROUTER_API_KEY", "secret")
+    monkeypatch.setattr(client, "OPENROUTER_MODEL", "approved/model-id")
+    monkeypatch.setattr(client, "OPENROUTER_MAX_RETRIES", 0)
     class Invalid(FakeResponse):
         def read(self): return b"not-json"
     monkeypatch.setattr(client, "urlopen", lambda *_a, **_k: Invalid({}))

@@ -14,7 +14,7 @@
 
 ## Overview
 
-HelpDesk AI is a Streamlit customer-support assistant built around retrieval-augmented generation (RAG). It searches the repository's knowledge documents using the existing FAISS index and local `sentence-transformers/all-MiniLM-L6-v2` embeddings. When configured, it sends retrieved evidence and the question to NVIDIA's OpenAI-compatible hosted chat API. Answers are instructed to cite retrieved passages; the application refuses weak matches and rejects missing or unknown citation markers.
+HelpDesk AI is a Streamlit customer-support assistant built around retrieval-augmented generation (RAG). It searches the repository's knowledge documents using the existing FAISS index and local `sentence-transformers/all-MiniLM-L6-v2` embeddings. When configured, it sends retrieved evidence and the question to OpenRouter's OpenAI-compatible chat API. Answers are instructed to cite retrieved passages; the application refuses weak matches and rejects missing or unknown citation markers.
 
 The quality of the answers depends on the contents of the knowledge base, the embedding/index compatibility, retrieval behavior, and the configured model. Citations and retrieval labels are not guarantees that an answer is correct. Review answers before using them for high-impact support decisions.
 
@@ -22,11 +22,11 @@ The quality of the answers depends on the contents of the knowledge base, the em
 
 - Semantic retrieval over the existing FAISS index and text knowledge base.
 - Grounded response instructions, explicit out-of-scope refusal, and evidence citations.
-- NVIDIA-compatible chat-completions client with configurable model ID, bounded timeout/retries, and safe error categories.
+- OpenRouter chat-completions client with the free NVIDIA Nemotron 3 Ultra model by default, bounded timeout/retries, and safe error categories.
 - Premium responsive Streamlit chat UI, starter questions, status panel, session metrics, clear-chat, and text export.
 - Input validation and bounded per-session conversation history.
 - Local/offline automated tests for validation, RAG evidence/citations, and mocked provider success/failure paths.
-- No NVIDIA model ID is assumed. Configure an exact model ID supported by your NVIDIA account.
+- The default model is `nvidia/nemotron-3-ultra-550b-a55b:free`; `OPENROUTER_MODEL` can override it.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ Streamlit UI (app.py)
       └── RAG service (utils/rag.py)
           ├── Existing FAISS index + local Hugging Face sentence embeddings
           ├── Weak-match abstention and source-ID mapping
-          └── NVIDIA OpenAI-compatible API (utils/nvidia_client.py)
+          └── OpenRouter OpenAI-compatible API (utils/openrouter_client.py)
 
 Offline ingestion: ingest.py → source documents → chunks → embeddings → FAISS
 ```
@@ -60,7 +60,7 @@ LICENSE                Existing MIT license
 data/                  Existing knowledge-base text files
 faiss_index/           Existing FAISS and LangChain docstore artifacts
 utils/rag.py           Retrieval, abstention, citations, and generation
-utils/nvidia_client.py NVIDIA-compatible API client
+utils/openrouter_client.py OpenRouter API client
 utils/input_policy.py  Question and session bounds
 utils/prompts.py       Grounded response policy
 utils/helpers.py       Chat export and shared helpers
@@ -81,7 +81,7 @@ python -m pip install -r requirements.txt
 cp .env.example .env                 # optional; never commit .env
 ```
 
-Set `NVIDIA_MODEL` to the exact supported model ID confirmed for your NVIDIA API account. Set `NVIDIA_API_KEY` in `.env` for local use or in Streamlit Community Cloud Secrets for deployment. **Do not paste credentials into source code, commit history, logs, or chat.** Without both settings, the app can initialize local retrieval but answer generation reports a safe configuration message.
+Set `OPENROUTER_API_KEY` in Streamlit Community Cloud Secrets for deployment; local `.env` values are used when a Streamlit Secret is absent. `OPENROUTER_MODEL` defaults to `nvidia/nemotron-3-ultra-550b-a55b:free` and can be overridden through Secrets or the local environment. **Do not paste credentials into source code, commit history, logs, or chat.** Without the API key, the app can initialize local retrieval but answer generation reports a safe configuration message.
 
 ```bash
 streamlit run app.py
@@ -95,11 +95,11 @@ The index is checked in. On first initialization, the local embedding model must
 
 | Variable | Purpose | Default / required |
 |---|---|---|
-| `NVIDIA_API_KEY` | Secret for server-side NVIDIA hosted inference | Required only for live generation |
-| `NVIDIA_MODEL` | Exact chat model identifier accepted by your NVIDIA account | **No default; configure explicitly** |
-| `NVIDIA_BASE_URL` | OpenAI-compatible NVIDIA API base URL | `https://integrate.api.nvidia.com/v1` |
-| `NVIDIA_TIMEOUT_SECONDS` | Upper-bounded request timeout | `30` seconds |
-| `NVIDIA_MAX_RETRIES` | Bounded retry count | `1` |
+| `OPENROUTER_API_KEY` | Server-side OpenRouter API key | Required only for live generation |
+| `OPENROUTER_MODEL` | OpenRouter model ID | `nvidia/nemotron-3-ultra-550b-a55b:free` |
+| `OPENROUTER_BASE_URL` | OpenAI-compatible API base URL | `https://openrouter.ai/api/v1` |
+| `OPENROUTER_TIMEOUT_SECONDS` | Upper-bounded request timeout | `30` seconds |
+| `OPENROUTER_MAX_RETRIES` | Bounded retry count | `1` |
 | `EMBEDDING_MODEL` | Local query/document embedding model | `sentence-transformers/all-MiniLM-L6-v2` |
 | `FAISS_PATH` | FAISS artifact directory | `faiss_index` |
 | `TOP_K` | Maximum retrieved passages (bounded by app) | `3` |
@@ -110,7 +110,7 @@ The index is checked in. On first initialization, the local embedding model must
 | `SESSION_REQUESTS_PER_MINUTE` | Session-local request ceiling | `20` |
 | `ASK_KRAVERSE_URL` | Optional, verified HTTPS link to existing assistant | Unset until canonical URL is confirmed |
 
-The NVIDIA endpoint and API protocol are configurable, but this repository intentionally does not guess a model ID. The inspected `MedRag-X` project used Groq rather than NVIDIA; it is not a source for NVIDIA model configuration.
+OpenRouter settings are read from Streamlit Secrets first, with environment variables (including local `.env`) as fallback. The configured free model is the default unless `OPENROUTER_MODEL` overrides it.
 
 The `ASK_KRAVERSE_URL` setting is blank by default. The app only renders a link when a valid HTTPS URL is explicitly configured. Do not set it until the assistant's canonical address is verified; iframe embedding or API integration has not been established.
 
@@ -120,11 +120,11 @@ Keep the current Streamlit deployment unless a separately reviewed migration is 
 
 1. Confirm the app's repository and branch selection before changing deployment configuration. `master` contains the app in the inspected repository; `main` has historically contained only a README.
 2. Deploy from the reviewed feature branch/PR only after the required checks pass and the repository owner approves the change.
-3. In the app's **Settings → Secrets**, configure `NVIDIA_API_KEY` and the confirmed `NVIDIA_MODEL`. Do not put secrets in GitHub Actions variables unless the workflow requires them.
+3. In the app's **Settings → Secrets**, configure `OPENROUTER_API_KEY`; optionally set `OPENROUTER_MODEL` to override the default. Do not put secrets in GitHub Actions variables unless the workflow requires them.
 4. Verify the deployment's build logs and perform a live end-to-end smoke query with known evidence. A successful build alone does not verify retrieval or generation.
 5. Preserve the prior deployment revision and existing index so the deployment can be rolled back.
 
-The app does not store durable chat history; the transcript and counters are session state. The request ceiling is per Streamlit session, not a substitute for account-wide abuse prevention. Questions and retrieved evidence are sent to NVIDIA when generation is enabled. Avoid entering sensitive personal or payment information.
+The app does not store durable chat history; the transcript and counters are session state. The request ceiling is per Streamlit session, not a substitute for account-wide abuse prevention. Questions and retrieved evidence are sent to OpenRouter when generation is enabled. Avoid entering sensitive personal or payment information.
 
 ## Tests
 
@@ -136,7 +136,7 @@ python -m pytest -q
 python -m compileall -q app.py config.py ingest.py utils tests
 ```
 
-Tests cover input/session/request bounds, provider payload/auth/error sanitization, retrieval abstention, citation validation, and Streamlit AppTest flows for starter questions, chat input, export, and clearing a session. They do not replace a real compatibility check of the committed FAISS artifacts or a live NVIDIA smoke test after configuration.
+Tests cover input/session/request bounds, provider payload/auth/error sanitization, retrieval abstention, citation validation, and Streamlit AppTest flows for starter questions, chat input, export, and clearing a session. They do not replace a real compatibility check of the committed FAISS artifacts or a live OpenRouter smoke test after configuration.
 
 ## Screenshots
 
