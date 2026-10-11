@@ -72,3 +72,20 @@ def test_irrelevant_question_still_abstains(monkeypatch):
 
     assert response.answer == rag.REFUSAL
     assert response.citations == []
+
+
+def test_resume_projects_question_returns_source_citation(monkeypatch):
+    resume = doc(
+        "Projects: MedRAG-X, a cited medical document RAG assistant; HelpDesk AI, an enterprise support RAG assistant.",
+        "Uploaded: synthetic_resume.txt",
+    )
+    uploaded = FakeStore([(resume, 0.25)])
+    monkeypatch.setattr(rag, "_vector_store", None)
+    monkeypatch.setattr(rag, "MAX_L2_DISTANCE", 1.5)
+    configure_llm(monkeypatch, "The resume lists MedRAG-X and HelpDesk AI as projects [S1].")
+
+    response = rag.query("What projects are mentioned in my resume?", uploaded_store=uploaded)
+
+    assert "MedRAG-X" in response.answer
+    assert "HelpDesk AI" in response.answer
+    assert response.citations == [{"id": "S1", "source": "Uploaded: synthetic_resume.txt"}]
