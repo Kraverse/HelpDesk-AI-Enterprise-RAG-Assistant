@@ -74,7 +74,12 @@ def get_embeddings() -> Any:
         from langchain_huggingface import HuggingFaceEmbeddings
 
         logger.info("Loading embedding model: %s", EMBEDDING_MODEL)
-        _embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+        # Keep the default (unnormalized) SentenceTransformer vectors explicit so
+        # upload indexing and query embedding share the same normalization convention.
+        _embeddings = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL,
+            encode_kwargs={"normalize_embeddings": False},
+        )
     return _embeddings
 
 
@@ -201,8 +206,9 @@ def _retrieve(store: Any, question: str, k: int, label: str) -> list[tuple[Any, 
             query_dimension = "adapter-managed"
         safe_scores = [round(float(score), 4) for _doc, score in results if math.isfinite(float(score))]
         logger.info(
-            "Retrieval diagnostics: store=%s chunks=%s query_dim=%s metric=%s retrieved=%d scores=%s",
+            "Retrieval diagnostics: store=%s model=%s normalized=false chunks=%s query_dim=%s metric=%s retrieved=%d scores=%s",
             label,
+            EMBEDDING_MODEL,
             getattr(index, "ntotal", "unknown"),
             query_dimension,
             metric,
