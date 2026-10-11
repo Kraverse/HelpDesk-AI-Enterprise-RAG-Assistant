@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from pathlib import Path
@@ -26,6 +27,7 @@ from config import (
     OPENROUTER_MODEL,
 )
 from utils.document_uploads import build_uploaded_index, prepare_upload_batch
+from utils.github_ingest import GitHubImportError, import_repository
 from utils.helpers import chat_history_to_string, get_time
 from utils.input_policy import bound_history, register_request, validate_question
 from utils.rag import get_embeddings, initialize_system
@@ -86,6 +88,8 @@ def init_state() -> None:
         "uploaded_files": {},
         "uploaded_store": None,
         "upload_statuses": [],
+        "github_repo_chunks": {},
+        "github_repos": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -133,6 +137,8 @@ def render_sidebar(status: dict) -> None:
         st.divider()
         render_upload_section()
         st.divider()
+        render_github_section()
+        st.divider()
         first, second = st.columns(2)
         with first:
             if st.button("Clear chat", use_container_width=True, key="clear_chat"):
@@ -149,6 +155,66 @@ def render_sidebar(status: dict) -> None:
                     mime="text/plain", use_container_width=True, key="download_chat",
                 )
         st.caption(f"Session limit: {MAX_CHAT_MESSAGES} messages · {MAX_QUESTION_CHARS} chars/question")
+
+
+def _rebuild_session_index() -> None:
+    """Rebuild one in-memory index from uploaded documents and imported repositories."""
+    chunks = [chunk for item in st.session_state.uploaded_files.values() for chunk in item["chunks"]]
+    for repo_chunks in st.session_state.github_repo_chunks.values():
+        chunks.extend(repo_chunks)
+    st.session_state.uploaded_store = build_uploaded_index(chunks, get_embeddings()) if chunks else None
+
+
+def render_github_section() -> None:
+    """Import GitHub source and documentation into this session's RAG index."""
+    st.markdown("### Connect GitHub repositories")
+    st.caption("Import public repositories by URL. Source files are indexed in memory for this session and cited in answers.")
+    urls = st.text_area(
+        "Repository URLs (one per line)",
+        placeholder="https://github.com/owner/repository",
+        key="github_repository_urls",
+        height=90,
+    )
+    if st.button("Import / refresh repositories", use_container_width=True, key="import_github_repos"):
+        targets = [line.strip() for line in urls.splitlines() if line.strip()]
+        if not targets:
+            st.warning("Enter at least one GitHub repository URL.")
+        else:
+            token = ""
+            try:
+                token = str(st.secrets.get("GITHUB_TOKEN", "")).strip()
+            except Exception:
+                pass
+            status = st.empty()
+            for target in targets[:10]:
+                try:
+                    with status.container():
+                        st.caption(f"Importing {target}…")
+                    chunks, info = import_repository(target, get_embeddings(), token=token)
+                    st.session_state.github_repo_chunks[info["repo"]] = chunks
+                    st.session_state.github_repos[info["repo"]] = info
+                    _rebuild_session_index()
+                    st.success(f"Imported {info['repo']}: {info['files']} files, {info['chunks']} chunks.")
+                except GitHubImportError as exc:
+                    st.warning(str(exc))
+                except Exception:
+                    st.warning("Could not import or index that repository. Check its URL and try again.")
+            status.empty()
+    if st.session_state.github_repos:
+        st.markdown("**Repositories in this session**")
+        for repo_name, info in list(st.session_state.github_repos.items()):
+            left, right = st.columns([4, 1])
+            left.caption(f"{repo_name} · {info['files']} files · {info['chunks']} chunks · {info['branch']}")
+            if right.button("Remove", key="remove_github_" + re.sub(r"[^a-zA-Z0-9]", "_", repo_name)):
+                st.session_state.github_repo_chunks.pop(repo_name, None)
+                st.session_state.github_repos.pop(repo_name, None)
+                _rebuild_session_index()
+                st.rerun()
+        if st.button("Clear imported repositories", use_container_width=True, key="clear_github_repos"):
+            st.session_state.github_repo_chunks = {}
+            st.session_state.github_repos = {}
+            _rebuild_session_index()
+            st.rerun()
 
 
 def render_upload_section() -> None:
@@ -178,9 +244,8 @@ def render_upload_section() -> None:
                 merged = {**st.session_state.uploaded_files, **pending}
                 try:
                     chunks = [chunk for item in merged.values() for chunk in item["chunks"]]
-                    uploaded_store = build_uploaded_index(chunks, get_embeddings())
                     st.session_state.uploaded_files = merged
-                    st.session_state.uploaded_store = uploaded_store
+                    _rebuild_session_index()
                 except Exception:  # noqa: BLE001 - suppress parser/embedding details from UI.
                     statuses = [
                         {"filename": s["filename"], "status": "index_error", "message": "Could not embed/index this session's uploads. Try smaller or readable files."}
@@ -207,8 +272,8 @@ def render_upload_section() -> None:
                 remaining = {key: value for key, value in st.session_state.uploaded_files.items() if key != digest}
                 try:
                     chunks = [chunk for doc in remaining.values() for chunk in doc["chunks"]]
-                    st.session_state.uploaded_store = build_uploaded_index(chunks, get_embeddings())
                     st.session_state.uploaded_files = remaining
+                    _rebuild_session_index()
                     st.session_state.upload_statuses = [
                         status for status in st.session_state.upload_statuses
                         if status["filename"] != item["filename"]
@@ -223,8 +288,8 @@ def render_upload_section() -> None:
                     st.warning("Could not update the session index. Uploaded documents were kept.")
         if st.button("Clear uploaded knowledge base", use_container_width=True, key="clear_uploads"):
             st.session_state.uploaded_files = {}
-            st.session_state.uploaded_store = None
             st.session_state.upload_statuses = []
+            _rebuild_session_index()
             st.rerun()
 
 
