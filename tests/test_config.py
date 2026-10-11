@@ -46,6 +46,11 @@ def test_malformed_numeric_setting_uses_default(monkeypatch):
     assert config._int_setting("TOP_K", 3, 1, 8) == 3
 
 
+def test_upload_limits_are_bounded():
+    assert config.MAX_UPLOAD_FILE_BYTES == 10 * 1024 * 1024
+    assert config.MAX_UPLOAD_DOCUMENTS == 20
+
+
 def test_numeric_setting_is_bounded(monkeypatch):
     monkeypatch.setenv("TOP_K", "999")
     assert config._int_setting("TOP_K", 3, 1, 8) == 8

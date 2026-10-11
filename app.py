@@ -21,11 +21,14 @@ from config import (
     LLM_REPO,
     MAX_CHAT_MESSAGES,
     MAX_QUESTION_CHARS,
+    MAX_UPLOAD_DOCUMENTS,
+    MAX_UPLOAD_FILE_BYTES,
     OPENROUTER_MODEL,
 )
+from utils.document_uploads import build_uploaded_index, prepare_upload_batch
 from utils.helpers import chat_history_to_string, get_time
 from utils.input_policy import bound_history, register_request, validate_question
-from utils.rag import initialize_system
+from utils.rag import get_embeddings, initialize_system
 from utils.rag import query as rag_query
 
 st.set_page_config(
@@ -80,6 +83,9 @@ def init_state() -> None:
         "system_initialized": False,
         "system_status": {},
         "request_timestamps": [],
+        "uploaded_files": {},
+        "uploaded_store": None,
+        "upload_statuses": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -109,6 +115,9 @@ def render_sidebar(status: dict) -> None:
         st.divider()
         st.markdown("### Knowledge base")
         st.caption(f"{status.get('doc_count', 0)} source documents · {status.get('chunk_count', 0)} indexed chunks")
+        uploaded_count = len(st.session_state.uploaded_files)
+        uploaded_chunks = sum(item["chunk_count"] for item in st.session_state.uploaded_files.values())
+        st.caption(f"{uploaded_count} session uploads · {uploaded_chunks} upload chunks")
         st.caption(f"Embeddings: {EMBEDDING_MODEL}")
         st.caption(f"LLM: {OPENROUTER_MODEL or LLM_REPO}")
         if st.session_state.question_count:
@@ -121,6 +130,8 @@ def render_sidebar(status: dict) -> None:
             st.link_button("Open Ask KraVerse AI", link, use_container_width=True)
         elif ASK_KRAVERSE_URL:
             st.caption("Ask KraVerse link is hidden because the configured URL is not a valid HTTPS URL.")
+        st.divider()
+        render_upload_section()
         st.divider()
         first, second = st.columns(2)
         with first:
@@ -138,6 +149,83 @@ def render_sidebar(status: dict) -> None:
                     mime="text/plain", use_container_width=True, key="download_chat",
                 )
         st.caption(f"Session limit: {MAX_CHAT_MESSAGES} messages · {MAX_QUESTION_CHARS} chars/question")
+
+
+def render_upload_section() -> None:
+    """Render safe ephemeral document upload controls in the existing sidebar."""
+    st.markdown("### Add knowledge documents")
+    st.caption(
+        f"Upload multiple PDF/TXT files (up to {MAX_UPLOAD_FILE_BYTES // (1024 * 1024)} MB each, {MAX_UPLOAD_DOCUMENTS} per session). "
+        "Files are processed in memory for this session only; built-in documents are preserved."
+    )
+    selected = st.file_uploader(
+        "Choose PDF or TXT documents",
+        type=["pdf", "txt"],
+        accept_multiple_files=True,
+        key="knowledge_uploads",
+    )
+    if st.button("Process selected documents", use_container_width=True, key="process_uploads"):
+        if not selected:
+            st.warning("Choose at least one PDF or TXT file first.")
+        else:
+            pending, statuses = prepare_upload_batch(
+                [(file.name, file.getvalue()) for file in selected],
+                set(st.session_state.uploaded_files),
+                MAX_UPLOAD_DOCUMENTS,
+            )
+
+            if pending:
+                merged = {**st.session_state.uploaded_files, **pending}
+                try:
+                    chunks = [chunk for item in merged.values() for chunk in item["chunks"]]
+                    uploaded_store = build_uploaded_index(chunks, get_embeddings())
+                    st.session_state.uploaded_files = merged
+                    st.session_state.uploaded_store = uploaded_store
+                except Exception:  # noqa: BLE001 - suppress parser/embedding details from UI.
+                    statuses = [
+                        {"filename": s["filename"], "status": "index_error", "message": "Could not embed/index this session's uploads. Try smaller or readable files."}
+                        if s["status"] == "ready" else s
+                        for s in statuses
+                    ]
+            st.session_state.upload_statuses = statuses
+
+    for item in st.session_state.upload_statuses:
+        message = f"**{item['filename']}** — {item['message']}"
+        if item["status"] == "ready":
+            st.success(message)
+        elif item["status"] in {"duplicate", "limit", "removed"}:
+            st.info(message)
+        else:
+            st.warning(message)
+
+    if st.session_state.uploaded_files:
+        st.markdown("**Uploaded this session**")
+        for digest, item in list(st.session_state.uploaded_files.items()):
+            left, right = st.columns([4, 1])
+            left.caption(f"{item['filename']} · {item['chunk_count']} chunks")
+            if right.button("Remove", key=f"remove_upload_{digest[:12]}", help=f"Remove {item['filename']}"):
+                remaining = {key: value for key, value in st.session_state.uploaded_files.items() if key != digest}
+                try:
+                    chunks = [chunk for doc in remaining.values() for chunk in doc["chunks"]]
+                    st.session_state.uploaded_store = build_uploaded_index(chunks, get_embeddings())
+                    st.session_state.uploaded_files = remaining
+                    st.session_state.upload_statuses = [
+                        status for status in st.session_state.upload_statuses
+                        if status["filename"] != item["filename"]
+                    ]
+                    st.session_state.upload_statuses.append({
+                        "filename": item["filename"],
+                        "status": "removed",
+                        "message": "Removed from this session's knowledge base.",
+                    })
+                    st.rerun()
+                except Exception:  # noqa: BLE001 - avoid surfacing embedding/index details.
+                    st.warning("Could not update the session index. Uploaded documents were kept.")
+        if st.button("Clear uploaded knowledge base", use_container_width=True, key="clear_uploads"):
+            st.session_state.uploaded_files = {}
+            st.session_state.uploaded_store = None
+            st.session_state.upload_statuses = []
+            st.rerun()
 
 
 def _handle_question(raw_question: str) -> bool:
@@ -159,7 +247,10 @@ def _handle_question(raw_question: str) -> bool:
         started = time.perf_counter()
         with st.spinner("Searching the knowledge base and preparing a grounded answer…"):
             try:
-                response = rag_query(question)
+                if st.session_state.uploaded_store is not None:
+                    response = rag_query(question, uploaded_store=st.session_state.uploaded_store)
+                else:
+                    response = rag_query(question)
             except Exception:  # noqa: BLE001 - UI boundary must not expose uncaught provider details.
                 # Never show the exception body (it may contain provider detail).
                 safe_error = "The request could not be completed. Please retry."

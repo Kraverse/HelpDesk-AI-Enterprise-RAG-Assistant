@@ -86,3 +86,12 @@ def test_unexpected_query_failure_is_safely_retained(monkeypatch):
     assert at.session_state["chat_history"][-1]["content"] == "The request could not be completed. Please retry."
     assert "private transport detail" not in str(at)
     assert not at.exception
+
+
+def test_document_upload_section_is_visible_and_empty_submit_is_safe(monkeypatch):
+    at = app_test(monkeypatch)
+    assert len(at.get("file_uploader")) == 1
+    assert any(button.label == "Process selected documents" for button in at.button)
+    next(button for button in at.button if button.label == "Process selected documents").click().run()
+    assert any("Choose at least one" in element.value for element in at.warning)
+    assert not at.exception

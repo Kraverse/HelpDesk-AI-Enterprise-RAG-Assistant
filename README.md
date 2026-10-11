@@ -21,6 +21,7 @@ The quality of the answers depends on the contents of the knowledge base, the em
 ## Features
 
 - Semantic retrieval over the existing FAISS index and text knowledge base.
+- Session-only PDF/TXT document uploads with text extraction, chunking, in-memory FAISS indexing, duplicate detection, per-document removal, and clearing uploaded knowledge.
 - Grounded response instructions, explicit out-of-scope refusal, and evidence citations.
 - OpenRouter chat-completions client with the free NVIDIA Nemotron 3 Ultra model by default, bounded timeout/retries, and safe error categories.
 - Premium responsive Streamlit chat UI, starter questions, status panel, session metrics, clear-chat, and text export.
@@ -108,6 +109,8 @@ The index is checked in. On first initialization, the local embedding model must
 | `MAX_CHAT_MESSAGES` | Maximum retained session messages | `40` |
 | `MAX_SESSION_CHARS` | Maximum retained session text | `30000` |
 | `SESSION_REQUESTS_PER_MINUTE` | Session-local request ceiling | `20` |
+| `MAX_UPLOAD_FILE_MB` | Maximum size per PDF/TXT file (bounded by the app) | `10` MB |
+| `MAX_UPLOAD_DOCUMENTS` | Unique uploaded documents allowed per session (bounded by the app) | `20` |
 | `ASK_KRAVERSE_URL` | Optional, verified HTTPS link to existing assistant | Unset until canonical URL is confirmed |
 
 OpenRouter settings are read from Streamlit Secrets first, with environment variables (including local `.env`) as fallback. The configured free model is the default unless `OPENROUTER_MODEL` overrides it.
@@ -118,13 +121,17 @@ The `ASK_KRAVERSE_URL` setting is blank by default. The app only renders a link 
 
 Keep the current Streamlit deployment unless a separately reviewed migration is justified.
 
-1. Confirm the app's repository and branch selection before changing deployment configuration. `master` contains the app in the inspected repository; `main` has historically contained only a README.
-2. Deploy from the reviewed feature branch/PR only after the required checks pass and the repository owner approves the change.
+1. The Streamlit entry point is `app.py`. The repository's application-bearing branch is `master`; `main` contains only a README in the inspected repository snapshot.
+2. Community Cloud's selected source branch and entrypoint are configured in Streamlit, not in this repository. Confirm the existing app's Settings point to this repository, the intended application branch, and `app.py`; no deployment setting is changed by the code.
 3. In the app's **Settings → Secrets**, configure `OPENROUTER_API_KEY`; optionally set `OPENROUTER_MODEL` to override the default. Do not put secrets in GitHub Actions variables unless the workflow requires them.
 4. Verify the deployment's build logs and perform a live end-to-end smoke query with known evidence. A successful build alone does not verify retrieval or generation.
 5. Preserve the prior deployment revision and existing index so the deployment can be rolled back.
 
 The app does not store durable chat history; the transcript and counters are session state. The request ceiling is per Streamlit session, not a substitute for account-wide abuse prevention. Questions and retrieved evidence are sent to OpenRouter when generation is enabled. Avoid entering sensitive personal or payment information.
+
+### Uploading documents
+
+Use **Add knowledge documents** in the existing sidebar to select one or more `.pdf` or `.txt` files and process them. Each file is limited to 10 MB by default, and up to 20 unique documents are allowed per Streamlit session. Text is extracted and split with the configured chunk settings, then embedded with the same local sentence-transformer model as the existing FAISS index. Uploaded chunks are stored in a separate in-memory FAISS index scoped to that session and merged with the repository knowledge index during retrieval; they are not written to disk or shared with other sessions. Remove individual uploaded files or use **Clear uploaded knowledge base** to clear all uploads for the current session. These controls do not delete the built-in repository documents/index. Duplicate file content is detected by SHA-256. Empty, encrypted, unreadable, unsupported, image-only/scanned PDFs, oversized files, and document-limit errors are shown as per-file statuses. Scanned PDFs are not OCR processed. Uploads disappear when the Streamlit session ends.
 
 ## Tests
 
@@ -136,7 +143,7 @@ python -m pytest -q
 python -m compileall -q app.py config.py ingest.py utils tests
 ```
 
-Tests cover input/session/request bounds, provider payload/auth/error sanitization, retrieval abstention, citation validation, and Streamlit AppTest flows for starter questions, chat input, export, and clearing a session. They do not replace a real compatibility check of the committed FAISS artifacts or a live OpenRouter smoke test after configuration.
+Tests cover input/session/request bounds, provider payload/auth/error sanitization, retrieval abstention, citation validation, TXT/PDF extraction and invalid-file cases, duplicate/limit handling, real in-memory FAISS upload-index creation/search with deterministic test embeddings, uploaded-document retrieval/citations, and Streamlit AppTest flows for chat and the upload panel. They do not replace a live OpenRouter smoke test after configuration.
 
 ## Screenshots
 

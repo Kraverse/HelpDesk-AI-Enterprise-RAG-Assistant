@@ -129,8 +129,8 @@ def _citations(documents: list[Any]) -> list[dict[str, str]]:
     return citations
 
 
-def query(question: str) -> RAGResponse:
-    """Retrieve evidence, abstain on weak matches, then generate cited content."""
+def query(question: str, uploaded_store: Any = None) -> RAGResponse:
+    """Retrieve from base and session-upload indexes, abstain, then generate citations."""
     started = time.perf_counter()
     response = RAGResponse()
     normalized, validation_error = validate_question(question)
@@ -139,15 +139,21 @@ def query(question: str) -> RAGResponse:
         response.response_time = round(time.perf_counter() - started, 2)
         return response
     question = normalized
-    if _vector_store is None:
+    stores = [store for store in (_vector_store, uploaded_store) if store is not None]
+    if not stores:
         response.error = "The knowledge index is unavailable. Please try again later."
         response.response_time = round(time.perf_counter() - started, 2)
         return response
 
-    try:
-        results = _vector_store.similarity_search_with_score(question, k=TOP_K)
-    except Exception as exc:  # noqa: BLE001 - normalize vector-store adapter errors.
-        logger.warning("Retrieval failed (%s)", type(exc).__name__)
+    results: list[tuple[Any, float]] = []
+    retrieval_errors = 0
+    for store in stores:
+        try:
+            results.extend(store.similarity_search_with_score(question, k=TOP_K))
+        except Exception as exc:  # noqa: BLE001 - normalize vector-store adapter errors.
+            retrieval_errors += 1
+            logger.warning("Retrieval failed (%s)", type(exc).__name__)
+    if retrieval_errors == len(stores):
         response.error = "Knowledge retrieval failed. Please try again."
         response.response_time = round(time.perf_counter() - started, 2)
         return response
@@ -157,19 +163,17 @@ def query(question: str) -> RAGResponse:
         response.response_time = round(time.perf_counter() - started, 2)
         return response
 
+    results.sort(key=lambda result: float(result[1]))
+    results = [result for result in results if float(result[1]) <= MAX_L2_DISTANCE][:TOP_K]
+    if not results:
+        response.answer = REFUSAL
+        response.relevance = "No sufficiently relevant evidence"
+        response.response_time = round(time.perf_counter() - started, 2)
+        return response
     documents = [doc for doc, _score in results]
-    distances = [float(score) for _doc, score in results]
     response.documents = documents
     response.citations = _citations(documents)
     response.sources = [citation["source"] for citation in response.citations]
-    nearest_distance = min(distances)
-    if nearest_distance > MAX_L2_DISTANCE:
-        response.answer = REFUSAL
-        response.relevance = "No sufficiently relevant evidence"
-        response.citations = []
-        response.sources = []
-        response.response_time = round(time.perf_counter() - started, 2)
-        return response
     response.relevance = "Evidence retrieved; relevance is not a probability of correctness"
 
     if not OPENROUTER_API_KEY:
