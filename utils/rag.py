@@ -182,28 +182,29 @@ def _resume_lexical_overlap(question: str, document: Any) -> int:
 def _retrieve(store: Any, question: str, k: int, label: str) -> list[tuple[Any, float]]:
     """Search using the configured query embedder and emit content-free diagnostics."""
     try:
-        embedding = get_embeddings()
-        vector = embedding.embed_query(question)
         index = getattr(store, "index", None)
-        dimension = getattr(index, "d", None)
         metric = _metric_name(store)
-        if dimension is not None and len(vector) != int(dimension):
-            logger.warning(
-                "Retrieval rejected: store=%s reason=embedding_dimension_mismatch query_dim=%d index_dim=%d",
-                label, len(vector), int(dimension),
-            )
-            return []
-        if hasattr(store, "similarity_search_by_vector_with_score"):
+        if index is not None and hasattr(store, "similarity_search_by_vector_with_score"):
+            vector = get_embeddings().embed_query(question)
+            dimension = getattr(index, "d", None)
+            if dimension is not None and len(vector) != int(dimension):
+                logger.warning(
+                    "Retrieval rejected: store=%s reason=embedding_dimension_mismatch query_dim=%d index_dim=%d",
+                    label, len(vector), int(dimension),
+                )
+                return []
             results = store.similarity_search_by_vector_with_score(vector, k=k)
+            query_dimension = len(vector)
         else:
             # Compatibility for simple test doubles and older store adapters.
             results = store.similarity_search_with_score(question, k=k)
+            query_dimension = "adapter-managed"
         safe_scores = [round(float(score), 4) for _doc, score in results if math.isfinite(float(score))]
         logger.info(
-            "Retrieval diagnostics: store=%s chunks=%s query_dim=%d metric=%s retrieved=%d scores=%s",
+            "Retrieval diagnostics: store=%s chunks=%s query_dim=%s metric=%s retrieved=%d scores=%s",
             label,
             getattr(index, "ntotal", "unknown"),
-            len(vector),
+            query_dimension,
             metric,
             len(results),
             safe_scores,
@@ -263,7 +264,14 @@ def query(question: str, uploaded_store: Any = None) -> RAGResponse:
         response.response_time = round(time.perf_counter() - started, 2)
         return response
 
-    results.sort(key=lambda item: float(item[1]))
+    # FAISS L2 scores are distances (lower is better); inner-product scores rank higher-first.
+    # Sort within the index's declared convention instead of treating all scores as distances.
+    def _rank_key(item: tuple[Any, float, str]) -> float:
+        doc, score, label = item
+        store = next((candidate for candidate, candidate_label in stores if candidate_label == label), None)
+        return -float(score) if _metric_name(store) == "inner_product" else float(score)
+
+    results.sort(key=_rank_key)
     accepted: list[tuple[Any, float, str]] = []
     rejected_scores: list[float] = []
     for doc, score, label in results:
