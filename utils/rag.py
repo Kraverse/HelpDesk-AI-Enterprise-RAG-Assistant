@@ -239,8 +239,12 @@ def query(question: str, uploaded_store: Any = None) -> RAGResponse:
     overview_query = resume_query and bool(_OVERVIEW_TERMS.search(question))
 
     # A question explicitly about the user's resume must be grounded in session uploads,
-    # not in generic built-in help-centre documents. If no upload index exists, refuse.
-    if resume_query and uploaded_store is not None:
+    # not in generic built-in help-centre documents.
+    if resume_query:
+        if uploaded_store is None:
+            response.error = "Upload and process your resume first to ask questions about it."
+            response.response_time = round(time.perf_counter() - started, 2)
+            return response
         stores = [(uploaded_store, "session_uploads")]
         retrieval_question = _expanded_resume_query(question) if overview_query else question
     else:
